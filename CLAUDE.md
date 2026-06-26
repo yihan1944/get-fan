@@ -4,47 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-一个 Chrome 浏览器插件，用于将饭否推文下载为 Markdown 或 HTML 格式（可打印为 PDF）。
+Chrome 浏览器插件（Manifest V3），用于将饭否（fanfou.com）推文下载为 Markdown 或 HTML 格式。无构建步骤、无依赖——直接加载为 Chrome 已解压扩展即可运行。
 
-## 功能特性
+## 架构与数据流
 
-1. 下载全部推文
-2. 下载指定数量推文（最近 n 条，n 为正整数）
-3. 自动翻页获取大量推文，显示实时进度
-4. 内容格式：发送时间 + 推文内容（图片推文显示"图片"）
-5. 按日期分组展示
-6. 支持导出为 Markdown 和 HTML 格式
-7. 基于用户本地电脑运行
+整个应用逻辑集中在 `popup.js` 一个文件中（~396 行），无模块化、无 background script、无 content script 声明。
 
-## 项目结构
+**执行流程：**
+1. 用户点击插件图标 → 弹出 `popup.html`（320px 宽 popup）
+2. 用户选择下载范围（全部/最近 N 条）和格式（Markdown/HTML）
+3. `popup.js` 通过 `chrome.tabs.query()` 获取当前标签页，校验是否在 `fanfou.com`
+4. 从 URL 路径提取用户 ID（如 `fanfou.com/yihan1944`），排除 `home`/`login`/`settings` 等保留路径
+5. **第 1 页**：`chrome.scripting.executeScript()` 注入 `fetchCurrentPageTweets()` 到活动标签页，直接读取 DOM
+6. **后续页**：`fetch()` + `credentials: 'include'` 请求 `https://fanfou.com/{userId}/p.{N}`，用 `DOMParser` 解析 HTML
+7. 翻页直到达到目标数量或无下一页链接
+8. 生成 Markdown/HTML 内容，通过 `chrome.downloads.download()` + `data:` URL + `saveAs: true` 触发下载
 
+**Fanfou DOM 选择器（关键依赖）：**
+- `#stream ol li` — 单条推文容器
+- `#stream span.content` — 推文文本
+- `#stream a.time` — 推文时间（取 `title` 属性获取完整时间）
+- `.paginator` — 翻页区域，"下一页"链接判断是否还有后续页
+- `#sidebar .vcard a[href*="/friends/"]` / `#user_stats a[href*="/friends/"]` — 从侧边栏提取用户 ID
+
+## Chrome API 使用
+
+| API | 用途 |
+|---|---|
+| `chrome.tabs.query()` | 获取活动标签页 ID 和 URL |
+| `chrome.scripting.executeScript()` | 注入抓取函数到饭否页面 |
+| `chrome.downloads.download()` | 触发文件下载 |
+
+## 打包发布
+
+无构建步骤。手动打包为 zip 上传 Chrome Web Store：
+
+```bash
+zip -r get-fan.zip manifest.json popup.html popup.css popup.js icons/
 ```
-get-fan/
-├── manifest.json      # Chrome 插件配置
-├── popup.html         # 插件弹窗界面
-├── popup.css          # 样式文件
-├── popup.js           # 主逻辑
-├── icons/             # 插件图标
-│   └── icon128.png
-└── readme.md          # 项目说明
-```
 
-## 安装使用
+## 已知问题
 
-1. 打开 Chrome 浏览器，访问 `chrome://extensions/`
-2. 开启"开发者模式"
-3. 点击"加载已解压的扩展程序"
-4. 选择本项目目录
-5. 打开饭否网站 (fanfou.com) 并登录
-6. 点击插件图标，选择下载选项
-
-## 技术说明
-
-- 使用 Chrome Extension Manifest V3
-- 通过 `chrome.scripting.executeScript` 注入内容脚本
-- 使用 `fetch` API 获取分页数据，避免页面跳转
-- HTML 文件可直接打印为 PDF（`Ctrl+P`）
-- 推文选择器：`#stream span.content`、`#stream a.time`
+- `popup.js` 中 `loadScript()` 函数（362-369 行）已定义但从未调用——死代码
+- manifest 只声明了 128px 图标，`icons/README.md` 提到的 16px/48px 变体不存在
+- HTML 格式单选按钮的 value 是 `pdf`，实际生成的是 HTML（用户可 `Ctrl+P` 打印为 PDF）
+- 无 Chrome storage API 使用——每次打开 popup 不保留上次设置
 
 ## 语言约定
 
