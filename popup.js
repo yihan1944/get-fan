@@ -228,15 +228,23 @@ document.addEventListener('DOMContentLoaded', () => {
     return { tweets, hasNextPage, userId };
   }
 
-  // 在页面中执行的函数，从 URL 获取推文
-  async function fetchTweetsFromUrl({ url, scope, count }) {
+  // 在页面中执行的函数，从 URL 获取推文（使用同步 XHR，避免 executeScript 中 fetch 不稳定的问题）
+  function fetchTweetsFromUrl({ url, scope, count }) {
     const tweets = [];
     let hasNextPage = false;
 
     try {
-      // 使用 fetch 获取页面内容
-      const response = await fetch(url, { credentials: 'include' });
-      const html = await response.text();
+      // 使用同步 XMLHttpRequest 获取页面内容
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', url, false); // false = 同步
+      xhr.withCredentials = true;
+      xhr.send(null);
+
+      if (xhr.status !== 200) {
+        return { tweets, hasNextPage, error: `HTTP ${xhr.status}` };
+      }
+
+      const html = xhr.responseText;
 
       // 解析 HTML
       const parser = new DOMParser();
