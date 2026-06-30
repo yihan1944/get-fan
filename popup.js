@@ -129,27 +129,31 @@ document.addEventListener('DOMContentLoaded', () => {
       page++;
     }
 
-    // 获取后续页面
+    // 获取后续页面（popup 发起 fetch，HTML 传给注入函数解析）
     while (hasNext) {
       showStatus(`正在获取第 ${page} 页...`);
 
       const pageUrl = `https://fanfou.com/${userId}/p.${page}`;
 
       try {
+        // popup 发起请求，自带 host_permissions 授权
+        const response = await fetch(pageUrl, { credentials: 'include' });
+        if (!response.ok) {
+          console.error('[饭否插件] 第', page, '页 HTTP 错误:', response.status);
+          break;
+        }
+        const html = await response.text();
+
+        // 注入函数只负责解析 HTML 字符串，不发起网络请求
         const result = await chrome.scripting.executeScript({
           target: { tabId: tabId },
-          function: fetchTweetsFromUrl,
-          args: [{ url: pageUrl, scope, count: count ? count - allTweets.length : null }]
+          function: parseTweetsFromHtml,
+          args: [{ html, scope, count: count ? count - allTweets.length : null }]
         });
 
         const pageData = result?.[0]?.result;
         if (!pageData || !pageData.tweets) {
-          console.error('[饭否插件] 第', page, '页返回数据异常:', result);
-          break;
-        }
-
-        if (pageData.error) {
-          console.error('[饭否插件] 第', page, '页获取失败:', pageData.error);
+          console.error('[饭否插件] 第', page, '页解析异常:', result);
           break;
         }
 
@@ -228,69 +232,51 @@ document.addEventListener('DOMContentLoaded', () => {
     return { tweets, hasNextPage, userId };
   }
 
-  // 在页面中执行的函数，从 URL 获取推文（使用同步 XHR，避免 executeScript 中 fetch 不稳定的问题）
-  function fetchTweetsFromUrl({ url, scope, count }) {
+  // 在页面中执行的函数，解析 HTML 字符串中的推文
+  function parseTweetsFromHtml({ html, scope, count }) {
     const tweets = [];
     let hasNextPage = false;
 
-    try {
-      // 使用同步 XMLHttpRequest 获取页面内容
-      const xhr = new XMLHttpRequest();
-      xhr.open('GET', url, false); // false = 同步
-      xhr.withCredentials = true;
-      xhr.send(null);
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
 
-      if (xhr.status !== 200) {
-        return { tweets, hasNextPage, error: `HTTP ${xhr.status}` };
+    // 获取 #stream 元素
+    const stream = doc.getElementById('stream');
+    if (!stream) return { tweets, hasNextPage };
+
+    // 获取 #stream 下的 li 元素
+    const items = stream.querySelectorAll('ol li');
+
+    for (const item of items) {
+      if (scope === 'recent' && count && tweets.length >= count) break;
+
+      // 获取内容
+      const contentEl = item.querySelector('span.content');
+      if (!contentEl) continue;
+
+      let content = contentEl.textContent.trim();
+      if (!content) continue;
+
+      // 获取时间
+      const timeEl = item.querySelector('a.time');
+      let time = '';
+      if (timeEl) {
+        time = timeEl.getAttribute('title') || timeEl.textContent.trim();
       }
 
-      const html = xhr.responseText;
+      tweets.push({ content, time });
+    }
 
-      // 解析 HTML
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-
-      // 获取 #stream 元素
-      const stream = doc.getElementById('stream');
-      if (!stream) return { tweets, hasNextPage };
-
-      // 获取 #stream 下的 li 元素
-      const items = stream.querySelectorAll('ol li');
-
-      for (const item of items) {
-        if (scope === 'recent' && count && tweets.length >= count) break;
-
-        // 获取内容
-        const contentEl = item.querySelector('span.content');
-        if (!contentEl) continue;
-
-        let content = contentEl.textContent.trim();
-        if (!content) continue;
-
-        // 获取时间
-        const timeEl = item.querySelector('a.time');
-        let time = '';
-        if (timeEl) {
-          time = timeEl.getAttribute('title') || timeEl.textContent.trim();
-        }
-
-        tweets.push({ content, time });
-      }
-
-      // 检查是否有下一页
-      const paginator = doc.querySelector('.paginator');
-      if (paginator) {
-        const links = paginator.querySelectorAll('a');
-        for (const link of links) {
-          if (link.textContent.trim() === '下一页') {
-            hasNextPage = true;
-            break;
-          }
+    // 检查是否有下一页
+    const paginator = doc.querySelector('.paginator');
+    if (paginator) {
+      const links = paginator.querySelectorAll('a');
+      for (const link of links) {
+        if (link.textContent.trim() === '下一页') {
+          hasNextPage = true;
+          break;
         }
       }
-    } catch (e) {
-      console.log('[饭否插件] 获取页面失败:', url, e);
-      return { tweets, hasNextPage: false, error: e.message };
     }
 
     return { tweets, hasNextPage };
