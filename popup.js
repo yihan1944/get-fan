@@ -107,7 +107,10 @@ document.addEventListener('DOMContentLoaded', () => {
       args: [{ scope, count: count ? count - allTweets.length : null }]
     });
 
-    const firstData = firstResult[0].result;
+    const firstData = firstResult?.[0]?.result;
+    if (!firstData || !firstData.tweets) {
+      throw new Error('无法获取当前页面推文，请刷新页面后重试');
+    }
     allTweets.push(...firstData.tweets);
 
     // 如果没有用户 ID，从页面获取
@@ -132,23 +135,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const pageUrl = `https://fanfou.com/${userId}/p.${page}`;
 
-      const result = await chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        function: fetchTweetsFromUrl,
-        args: [{ url: pageUrl, scope, count: count ? count - allTweets.length : null }]
-      });
+      try {
+        const result = await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          function: fetchTweetsFromUrl,
+          args: [{ url: pageUrl, scope, count: count ? count - allTweets.length : null }]
+        });
 
-      const { tweets, hasNextPage } = result[0].result;
-      allTweets.push(...tweets);
+        const pageData = result?.[0]?.result;
+        if (!pageData || !pageData.tweets) {
+          console.error('[饭否插件] 第', page, '页返回数据异常:', result);
+          break;
+        }
 
-      showStatus(`已获取 ${allTweets.length} 条推文${scope === 'recent' && count ? `，目标 ${count} 条` : ''}`);
+        if (pageData.error) {
+          console.error('[饭否插件] 第', page, '页获取失败:', pageData.error);
+          break;
+        }
 
-      if (scope === 'recent' && count && allTweets.length >= count) {
-        hasNext = false;
-      } else if (!hasNextPage) {
-        hasNext = false;
-      } else {
-        page++;
+        allTweets.push(...pageData.tweets);
+
+        showStatus(`已获取 ${allTweets.length} 条推文${scope === 'recent' && count ? `，目标 ${count} 条` : ''}`);
+
+        if (scope === 'recent' && count && allTweets.length >= count) {
+          hasNext = false;
+        } else if (!pageData.hasNextPage) {
+          hasNext = false;
+        } else {
+          page++;
+        }
+      } catch (e) {
+        console.error('[饭否插件] 获取第', page, '页失败:', e);
+        break;
       }
     }
 
@@ -264,6 +282,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (e) {
       console.log('[饭否插件] 获取页面失败:', url, e);
+      return { tweets, hasNextPage: false, error: e.message };
     }
 
     return { tweets, hasNextPage };
